@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CwManageClient } from "../api-client.js";
+import {
+  fetchAllPages,
+  mapWithConcurrency,
+  andConditions,
+  round2,
+  type Reference,
+} from "./paging.js";
 
 /**
  * Procurement inventory tools (ConnectWise Procurement API).
@@ -29,20 +36,11 @@ import { CwManageClient } from "../api-client.js";
  *    average cost that ConnectWise itself holds against the inventory.
  */
 
-/** ConnectWise caps pageSize at 1000 on every paged endpoint. */
-const MAX_PAGE_SIZE = 1000;
-
 /** Bins are scanned concurrently, kept low so a wide scan does not trip API rate limits. */
 const BIN_SCAN_CONCURRENCY = 4;
 
 /** Catalog item lookups are chunked so the conditions string stays a sane length. */
 const CATALOG_LOOKUP_CHUNK = 100;
-
-interface Reference {
-  id?: number | null;
-  identifier?: string;
-  name?: string;
-}
 
 interface WarehouseBinRecord {
   id?: number;
@@ -71,74 +69,6 @@ interface CatalogItemRecord {
   description?: string;
   cost?: number | null;
   serializedFlag?: boolean | null;
-}
-
-/**
- * Read every page of a ConnectWise collection endpoint.
- *
- * ConnectWise returns a bare array and no total count, so the only reliable
- * stop condition is a short page. maxPages guards against an endpoint that
- * ignores paging and hands back the same page forever. Hitting it throws
- * rather than returning a truncated list, because callers total the rows and
- * a silent partial result would give wrong totals.
- */
-async function fetchAllPages<T>(
-  client: CwManageClient,
-  path: string,
-  params: Record<string, string | number | undefined> = {},
-  maxPages = 100,
-): Promise<T[]> {
-  const pageSize = MAX_PAGE_SIZE;
-  const all: T[] = [];
-
-  for (let page = 1; page <= maxPages; page++) {
-    const batch = await client.get<T[]>(path, { ...params, page, pageSize });
-    if (!Array.isArray(batch) || batch.length === 0) break;
-    all.push(...batch);
-    if (batch.length < pageSize) break;
-    if (page === maxPages) {
-      throw new Error(
-        `Pagination limit of ${maxPages} pages reached before ${path} ended. Narrow the request rather than accept a partial result.`,
-      );
-    }
-  }
-
-  return all;
-}
-
-/** Run an async mapper over items, at most `limit` in flight at once. */
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let cursor = 0;
-
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    async () => {
-      for (let index = cursor++; index < items.length; index = cursor++) {
-        results[index] = await mapper(items[index]);
-      }
-    },
-  );
-
-  await Promise.all(workers);
-  return results;
-}
-
-/** Combine a caller-supplied conditions string with a filter this tool adds itself. */
-function andConditions(...parts: Array<string | undefined>): string | undefined {
-  const kept = parts.filter((p): p is string => Boolean(p && p.trim()));
-  if (kept.length === 0) return undefined;
-  if (kept.length === 1) return kept[0];
-  return kept.map((p) => `(${p})`).join(" and ");
-}
-
-/** Round to cents so accumulated floating point noise does not reach the caller. */
-function round2(value: number): number {
-  return Math.round(value * 100) / 100;
 }
 
 export function registerProcurementTools(server: McpServer, client: CwManageClient) {
