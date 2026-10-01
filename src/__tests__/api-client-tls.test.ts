@@ -2,6 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Agent } from "undici";
 import { CwManageClient, type CwManageConfig } from "../api-client.js";
 
+// The relaxed path calls undici's own fetch so the Agent and the fetch share one
+// undici version. Replace only `fetch`; Agent stays real so instanceof checks hold.
+const undiciFetchMock = vi.hoisted(() => vi.fn());
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+  fetch: undiciFetchMock,
+}));
+
 const baseConfig: CwManageConfig = {
   baseUrl: "https://api-na.myconnectwise.net",
   companyId: "acme",
@@ -34,12 +42,12 @@ describe("CwManageClient TLS dispatcher (no process.env mutation)", () => {
     if (savedTlsEnv === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     else process.env.NODE_TLS_REJECT_UNAUTHORIZED = savedTlsEnv;
     vi.unstubAllGlobals();
+    undiciFetchMock.mockReset();
   });
 
   it("never reads or writes process.env.NODE_TLS_REJECT_UNAUTHORIZED", async () => {
     process.env.CW_MANAGE_REJECT_UNAUTHORIZED = "false";
-    const fetchMock = vi.fn().mockResolvedValue(fakeResponse({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    undiciFetchMock.mockResolvedValue(fakeResponse({ ok: true }));
 
     const client = new CwManageClient(baseConfig);
     await client.get("/system/info");
@@ -57,24 +65,29 @@ describe("CwManageClient TLS dispatcher (no process.env mutation)", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [, options] = fetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
     expect(options).not.toHaveProperty("dispatcher");
+    expect(undiciFetchMock).not.toHaveBeenCalled();
   });
 
-  it("passes a per-instance undici Agent as the fetch dispatcher when relaxed, not a global toggle", async () => {
+  it("passes a per-instance undici Agent to undici's own fetch when relaxed, not a global toggle", async () => {
     process.env.CW_MANAGE_REJECT_UNAUTHORIZED = "false";
-    const fetchMock = vi.fn().mockResolvedValue(fakeResponse({ ok: true }));
-    vi.stubGlobal("fetch", fetchMock);
+    const globalFetchMock = vi.fn();
+    vi.stubGlobal("fetch", globalFetchMock);
+    undiciFetchMock.mockResolvedValue(fakeResponse({ ok: true }));
 
     const client = new CwManageClient(baseConfig);
     await client.get("/system/info");
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [, options] = fetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    const [, options] = undiciFetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
     expect(options.dispatcher).toBeInstanceOf(Agent);
+    // Node's global fetch rejects a foreign Agent, so it must not see this request.
+    expect(globalFetchMock).not.toHaveBeenCalled();
   });
 
   it("only the relaxed client instance carries a custom dispatcher", async () => {
     const fetchMock = vi.fn().mockResolvedValue(fakeResponse({ ok: true }));
     vi.stubGlobal("fetch", fetchMock);
+    undiciFetchMock.mockResolvedValue(fakeResponse({ ok: true }));
 
     process.env.CW_MANAGE_REJECT_UNAUTHORIZED = "false";
     const selfHostedClient = new CwManageClient({ ...baseConfig, clientId: "self-hosted" });
@@ -87,14 +100,15 @@ describe("CwManageClient TLS dispatcher (no process.env mutation)", () => {
       cloudClient.get("/system/info"),
     ]);
 
-    const dispatchers = fetchMock.mock.calls.map(
-      (c) => (c[1] as { dispatcher?: unknown }).dispatcher,
-    );
-    expect(dispatchers).toHaveLength(2);
-    // Only the self-hosted client's request carries the relaxed dispatcher;
-    // the cloud client uses Node's default -- no shared/global toggle.
-    expect(dispatchers[0]).toBeInstanceOf(Agent);
-    expect(dispatchers[1]).toBeUndefined();
+    // Only the self-hosted client's request goes through undici's fetch with the
+    // relaxed Agent; the cloud client uses Node's global fetch with no
+    // dispatcher -- no shared/global toggle.
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
+    const [, relaxedOptions] = undiciFetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
+    expect(relaxedOptions.dispatcher).toBeInstanceOf(Agent);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, cloudOptions] = fetchMock.mock.calls[0] as [string, { dispatcher?: unknown }];
+    expect(cloudOptions.dispatcher).toBeUndefined();
     expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
   });
 });

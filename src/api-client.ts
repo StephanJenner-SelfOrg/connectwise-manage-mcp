@@ -13,12 +13,18 @@
  *   CW_MANAGE_REJECT_UNAUTHORIZED - Set to "false" to allow self-signed certs (default: "true")
  *
  * Self-signed certificate support is scoped to this client instance's own
- * requests via an undici Agent passed as fetch's `dispatcher` option -- NOT
- * via the process-global NODE_TLS_REJECT_UNAUTHORIZED env var, which would
- * affect every concurrent request in the process (including unrelated
- * tenants' cloud-hosted, fully-verified connections).
+ * requests via an undici Agent passed as the `dispatcher` option of the
+ * standalone undici package's own `fetch` -- NOT via the process-global
+ * NODE_TLS_REJECT_UNAUTHORIZED env var, which would affect every concurrent
+ * request in the process (including unrelated tenants' cloud-hosted,
+ * fully-verified connections).
+ *
+ * The Agent and the fetch that consumes it must come from the same package.
+ * Node's global fetch runs the undici version bundled with the runtime, and it
+ * rejects an Agent built by a different undici version with UND_ERR_INVALID_ARG,
+ * which surfaces as a bare "fetch failed".
  */
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 export interface CwManageConfig {
   baseUrl: string;
@@ -70,10 +76,11 @@ export class CwManageClient {
     // verification can never bleed into a concurrent request against a
     // different (cloud, fully-verified) tenant's connection.
     //
-    // The default (verified) path deliberately uses Node's built-in fetch
-    // dispatcher: passing the standalone `undici` package's Agent to Node's
-    // global fetch breaks every request when the bundled undici version is
-    // incompatible with the one embedded in the running Node runtime.
+    // The default (verified) path deliberately uses Node's built-in fetch with
+    // no dispatcher. When a custom Agent exists, requests go through the
+    // standalone `undici` package's own fetch instead (see request below),
+    // because Node's global fetch rejects an Agent from a different undici
+    // version than the one bundled in the running Node runtime.
     this.dispatcher =
       process.env.CW_MANAGE_REJECT_UNAUTHORIZED === "false"
         ? new Agent({ connect: { rejectUnauthorized: false } })
@@ -115,27 +122,22 @@ export class CwManageClient {
       headers: this.defaultHeaders(),
     };
 
-    // Self-hosted instances with self-signed certificates: the dispatcher
-    // built in the constructor (only when CW_MANAGE_REJECT_UNAUTHORIZED is
-    // "false") scopes rejectUnauthorized to THIS client's connections only,
-    // with no process-global state involved.
-    //
-    // Assigned via a cast rather than a typed `dispatcher` field on
-    // fetchOptions: Node's global fetch/RequestInit types (from the
-    // `undici-types` package bundled with @types/node) declare their own
-    // `Dispatcher` interface, structurally incompatible with the standalone
-    // `undici` package's `Dispatcher` -- a well-known dual-package hazard.
-    // The value is fully compatible at runtime (Node's fetch is undici under
-    // the hood); only the type-checker sees two different declarations.
-    if (this.dispatcher) {
-      (fetchOptions as { dispatcher?: unknown }).dispatcher = this.dispatcher;
-    }
-
     if (options?.body !== undefined) {
       fetchOptions.body = JSON.stringify(options.body);
     }
 
-    const response = await fetch(url.toString(), fetchOptions);
+    // Self-hosted instances with self-signed certificates: the dispatcher
+    // built in the constructor (only when CW_MANAGE_REJECT_UNAUTHORIZED is
+    // "false") scopes rejectUnauthorized to THIS client's connections only,
+    // with no process-global state involved. It is paired with undici's own
+    // fetch so the Agent and the fetch share one undici version. The verified
+    // default path keeps Node's global fetch.
+    const response = this.dispatcher
+      ? await undiciFetch(url.toString(), {
+          ...fetchOptions,
+          dispatcher: this.dispatcher,
+        } as Parameters<typeof undiciFetch>[1])
+      : await fetch(url.toString(), fetchOptions);
 
     if (!response.ok) {
       const errorBody = await response.text();
