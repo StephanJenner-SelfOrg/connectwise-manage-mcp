@@ -1,5 +1,5 @@
 # Multi-stage build for efficient container size
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 # Build arguments
 ARG VERSION="unknown"
@@ -22,7 +22,7 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:22-alpine AS production
+FROM node:26-alpine AS production
 
 # Create a non-root user for security
 RUN addgroup -g 1001 -S cwmanage && \
@@ -75,7 +75,7 @@ LABEL org.opencontainers.image.description="Model Context Protocol server for Co
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.created="${BUILD_DATE}"
 LABEL org.opencontainers.image.revision="${COMMIT_SHA}"
-LABEL org.opencontainers.image.source="https://github.com/wyre-technology/connectwise-manage-mcp"
+LABEL org.opencontainers.image.source="https://github.com/WYRE-AI/connectwise-manage-mcp"
 LABEL org.opencontainers.image.vendor="Wyre Technology"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL io.modelcontextprotocol.server.name="io.github.wyre-technology/connectwise-manage-mcp"
+LABEL io.modelcontextprotocol.server.name="io.github.WYRE-AI/connectwise-manage-mcp"

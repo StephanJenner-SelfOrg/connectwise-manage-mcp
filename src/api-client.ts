@@ -11,7 +11,20 @@
  *   CW_MANAGE_PRIVATE_KEY       - API member private key
  *   CW_MANAGE_CLIENT_ID         - Client ID from ConnectWise Developer Portal
  *   CW_MANAGE_REJECT_UNAUTHORIZED - Set to "false" to allow self-signed certs (default: "true")
+ *
+ * Self-signed certificate support is scoped to this client instance's own
+ * requests via an undici Agent passed as the `dispatcher` option of the
+ * standalone undici package's own `fetch` -- NOT via the process-global
+ * NODE_TLS_REJECT_UNAUTHORIZED env var, which would affect every concurrent
+ * request in the process (including unrelated tenants' cloud-hosted,
+ * fully-verified connections).
+ *
+ * The Agent and the fetch that consumes it must come from the same package.
+ * Node's global fetch runs the undici version bundled with the runtime, and it
+ * rejects an Agent built by a different undici version with UND_ERR_INVALID_ARG,
+ * which surfaces as a bare "fetch failed".
  */
+import { Agent, fetch as undiciFetch } from "undici";
 
 export interface CwManageConfig {
   baseUrl: string;
@@ -46,7 +59,7 @@ export class CwManageClient {
   private readonly authHeader: string;
   private readonly clientId: string;
   private readonly apiBase: string;
-  private readonly rejectUnauthorized: boolean;
+  private readonly dispatcher: Agent | undefined;
 
   constructor(config: CwManageConfig) {
     // Auth: Basic base64("{companyId}+{publicKey}:{privateKey}")
@@ -57,8 +70,21 @@ export class CwManageClient {
     this.apiBase = config.baseUrl.includes("/v4_6_release/")
       ? config.baseUrl.replace(/\/+$/, "")
       : `${config.baseUrl}/v4_6_release/apis/3.0`;
-    this.rejectUnauthorized =
-      process.env.CW_MANAGE_REJECT_UNAUTHORIZED !== "false";
+    // Only build a custom dispatcher when relaxed TLS is explicitly requested.
+    // Scoped to this client instance's own connections only -- never touches
+    // process.env, so a self-hosted (self-signed) instance's relaxed TLS
+    // verification can never bleed into a concurrent request against a
+    // different (cloud, fully-verified) tenant's connection.
+    //
+    // The default (verified) path deliberately uses Node's built-in fetch with
+    // no dispatcher. When a custom Agent exists, requests go through the
+    // standalone `undici` package's own fetch instead (see request below),
+    // because Node's global fetch rejects an Agent from a different undici
+    // version than the one bundled in the running Node runtime.
+    this.dispatcher =
+      process.env.CW_MANAGE_REJECT_UNAUTHORIZED === "false"
+        ? new Agent({ connect: { rejectUnauthorized: false } })
+        : undefined;
   }
 
   private defaultHeaders(): Record<string, string> {
@@ -91,8 +117,7 @@ export class CwManageClient {
       }
     }
 
-    // For self-hosted instances with self-signed certificates
-    const fetchOptions: RequestInit & { dispatcher?: unknown } = {
+    const fetchOptions: RequestInit = {
       method,
       headers: this.defaultHeaders(),
     };
@@ -101,39 +126,32 @@ export class CwManageClient {
       fetchOptions.body = JSON.stringify(options.body);
     }
 
-    // Node 18+ supports rejecting unauthorized via the global agent or
-    // environment variable NODE_TLS_REJECT_UNAUTHORIZED. We set it here
-    // so callers don't have to worry about it.
-    const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    if (!this.rejectUnauthorized) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    // Self-hosted instances with self-signed certificates: the dispatcher
+    // built in the constructor (only when CW_MANAGE_REJECT_UNAUTHORIZED is
+    // "false") scopes rejectUnauthorized to THIS client's connections only,
+    // with no process-global state involved. It is paired with undici's own
+    // fetch so the Agent and the fetch share one undici version. The verified
+    // default path keeps Node's global fetch.
+    const response = this.dispatcher
+      ? await undiciFetch(url.toString(), {
+          ...fetchOptions,
+          dispatcher: this.dispatcher,
+        } as Parameters<typeof undiciFetch>[1])
+      : await fetch(url.toString(), fetchOptions);
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(
+        `ConnectWise API ${method} ${path} returned ${response.status}: ${errorBody}`,
+      );
     }
 
-    try {
-      const response = await fetch(url.toString(), fetchOptions);
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        throw new Error(
-          `ConnectWise API ${method} ${path} returned ${response.status}: ${errorBody}`,
-        );
-      }
-
-      // Some endpoints return 204 No Content
-      if (response.status === 204) {
-        return undefined as T;
-      }
-
-      return (await response.json()) as T;
-    } finally {
-      if (!this.rejectUnauthorized) {
-        if (prevTls === undefined) {
-          delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-        } else {
-          process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
-        }
-      }
+    // Some endpoints return 204 No Content
+    if (response.status === 204) {
+      return undefined as T;
     }
+
+    return (await response.json()) as T;
   }
 
   /** GET helper */
@@ -152,5 +170,10 @@ export class CwManageClient {
   /** PATCH helper */
   async patch<T = unknown>(path: string, body: unknown): Promise<T> {
     return this.request<T>("PATCH", path, { body });
+  }
+
+  /** DELETE helper. Manage returns 204 No Content on success. */
+  async delete<T = unknown>(path: string): Promise<T> {
+    return this.request<T>("DELETE", path);
   }
 }

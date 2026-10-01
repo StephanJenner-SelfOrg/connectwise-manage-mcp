@@ -5,23 +5,23 @@
 
 **Let your AI assistant work directly with ConnectWise Manage.** Search tickets, log time, look up companies and contacts, manage projects — through natural conversation instead of clicking through the CWM interface.
 
-This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives Claude (or any MCP-compatible AI) 51 tools covering the daily operations ConnectWise Manage shops depend on. Works with both **cloud-hosted and self-hosted** CWM instances — just point it at your server.
+This is a [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that gives Claude (or any MCP-compatible AI) 68 tools covering the daily operations ConnectWise Manage shops depend on. Works with both **cloud-hosted and self-hosted** CWM instances — just point it at your server.
 
 > **Part of the [MSP Claude Plugins](https://github.com/wyre-technology/msp-claude-plugins) ecosystem** — a growing suite of AI integrations for the MSP stack including [Autotask](https://github.com/wyre-technology/autotask-mcp), [Datto RMM](https://github.com/wyre-technology/datto-rmm-mcp), [IT Glue](https://github.com/wyre-technology/itglue-mcp), [HaloPSA](https://github.com/wyre-technology/halopsa-mcp), [NinjaOne](https://github.com/wyre-technology/ninjaone-mcp), [Huntress](https://github.com/wyre-technology/huntress-mcp), and more. Built by MSPs, for MSPs.
 
 ## One-Click Deployment
 
-[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/wyre-technology/connectwise-manage-mcp/tree/main)
+[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/WYRE-AI/connectwise-manage-mcp/tree/main)
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wyre-technology/connectwise-manage-mcp)
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/WYRE-AI/connectwise-manage-mcp)
 
-> **Note on registry auth:** This server depends only on public npm packages, so the Cloudflare and DigitalOcean cloud builders install its dependencies anonymously — no token is required for one-click deploy. (If a future release adds a private `@wyre-technology/*` dependency, you would supply a GitHub PAT with `read:packages` as a build variable — `NODE_AUTH_TOKEN` for Cloudflare Workers, a build-time `GITHUB_TOKEN` secret for DigitalOcean.)
+> **Note on registry auth:** This server depends only on public npm packages, so the Cloudflare and DigitalOcean cloud builders install its dependencies anonymously — no token is required for one-click deploy. (If a future release adds a private `@wyre-ai/*` dependency, you would supply a GitHub PAT with `read:packages` as a build variable — `NODE_AUTH_TOKEN` for Cloudflare Workers, a build-time `GITHUB_TOKEN` secret for DigitalOcean.)
 >
-> **Installing the published package:** The released package is published to the [GitHub Packages](https://github.com/wyre-technology/connectwise-manage-mcp/pkgs/npm/connectwise-manage-mcp) npm registry, which requires authentication on every install (even for public packages). To install it, authenticate npm to `npm.pkg.github.com` with a GitHub PAT that has `read:packages`:
+> **Installing the published package:** The released package is published to the [GitHub Packages](https://github.com/WYRE-AI/connectwise-manage-mcp/pkgs/npm/connectwise-manage-mcp) npm registry, which requires authentication on every install (even for public packages). To install it, authenticate npm to `npm.pkg.github.com` with a GitHub PAT that has `read:packages`:
 >
 > ```bash
 > export NODE_AUTH_TOKEN=$(gh auth token)
-> npm install @wyre-technology/connectwise-manage-mcp
+> npm install @wyre-ai/connectwise-manage-mcp
 > ```
 
 For deploying to **Azure Container Apps** with Entra ID OAuth 2.1, see [AZURE_ACA_DEPLOYMENT.md](AZURE_ACA_DEPLOYMENT.md).
@@ -65,13 +65,24 @@ If your self-hosted instance uses a self-signed certificate, also set `CW_MANAGE
 
 ## Available Tools
 
+### Interactive Ticket Card (MCP Apps)
+
+`cw_get_ticket` renders as an interactive card in MCP Apps hosts
+(Claude Desktop/web) with an in-card "Add note" round-trip via
+`cw_add_ticket_note` that always posts internal-only (`internalAnalysisFlag`)
+notes; plain-JSON behavior is unchanged in other hosts. The card is neutral by
+default and brandable via `window.__BRAND__` injection or `MCP_BRAND_*` env
+vars (`MCP_BRAND_NAME`, `MCP_BRAND_LOGO_URL`, `MCP_BRAND_PRIMARY_COLOR`,
+`MCP_BRAND_ACCENT_COLOR`, `MCP_BRAND_BG`, `MCP_BRAND_TEXT`) — no rebuild
+needed.
+
 ### Tickets
 - `cw_search_tickets` — Search service tickets with conditions
 - `cw_get_ticket` — Get a ticket by ID
-- `cw_create_ticket` — Create a new service ticket
+- `cw_create_ticket` — Create a new service ticket. Optional `parentTicketId` (the same field `cw_get_ticket` returns) creates the ticket as a child of that parent.
 - `cw_update_ticket` — Update a ticket (JSON Patch)
 - `cw_get_ticket_notes` — Get all notes on a ticket (including child ticket notes)
-- `cw_add_ticket_note` — Add a note to a ticket (discussion, internal, or resolution)
+- `cw_add_ticket_note` — Add a note to a ticket (discussion, internal, or resolution). Optional `emailContactFlag`, `emailResourceFlag`, `emailCcFlag`, and `emailCc` control who is emailed. **Nothing is emailed unless one of those flags is set** (or you set `processNotifications`). Omitting them does not email the contact. The create response reports `internalFlag` / `externalFlag` from the note type that was stored, so an internal note is not also reported as external.
 
 ### Companies
 - `cw_search_companies` — Search companies
@@ -80,7 +91,7 @@ If your self-hosted instance uses a self-signed certificate, also set `CW_MANAGE
 - `cw_update_company` — Update a company (JSON Patch)
 
 ### Contacts
-- `cw_search_contacts` — Search contacts
+- `cw_search_contacts` — Search contacts. Filter contact type with `typeName`, `typeId`, or `childConditions` (for example `types/name = "Primary"`). `types` / `types/name` in `conditions` is invalid and returns 400 `ApiFindCondition` because type is a child collection; the tool moves those clauses to `childConditions`. Contacts have `firstName` and `lastName`, not `name`. String values use double quotes (`firstName = "Ada"`); single quotes are accepted and rewritten.
 - `cw_get_contact` — Get a contact by ID
 - `cw_create_contact` — Create a new contact
 
@@ -97,6 +108,15 @@ If your self-hosted instance uses a self-signed certificate, also set `CW_MANAGE
 - `cw_search_time_entries` — Search time entries
 - `cw_get_time_entry` — Get a time entry by ID
 - `cw_create_time_entry` — Create a new time entry
+- `cw_update_time_entry` — Correct a time entry (JSON Patch on `PATCH /time/entries/{id}`). Use this to fix `actualHours` when a metered agreement rounds to 0.25.
+- `cw_delete_time_entry` — Delete a time entry (`DELETE /time/entries/{id}`). Manage rejects deletes of entries that are already billed.
+
+### Schedule Entries
+- `cw_search_schedule_entries` — Search booked resource time
+- `cw_list_schedule_types` — List schedule types (Service, Project, Sales, Meeting)
+- `cw_list_schedule_statuses` — List schedule statuses (Tentative, Firm)
+- `cw_create_schedule_entry` — Book resource time against a ticket, activity or project ticket
+- `cw_update_schedule_entry` — Update a schedule entry (JSON Patch)
 
 ### Members
 - `cw_search_members` — Search members/technicians
@@ -120,6 +140,14 @@ If your self-hosted instance uses a self-signed certificate, also set `CW_MANAGE
 - `cw_search_agreements` — Search agreements
 - `cw_get_agreement` — Get an agreement by ID
 - `cw_get_agreement_additions` — Get additions (line items) on an agreement
+- `cw_update_agreement_addition` — Update an addition with JSON Patch (quantity, effectiveDate, cancelledDate, billCustomer, etc.); supports a `dryRun` preview that makes no write
+- `cw_create_agreement_addition` — Create a new addition on an agreement
+- `cw_search_agreement_additions`: Find every active addition carrying one catalog item, across all agreements of every type
+- `cw_update_agreement_addition_product`: Repoint one addition to a different product, holding its billing values steady. **Changes live billing**, so it defaults to a dry run
+
+ConnectWise exposes additions only as children of a single agreement, with no cross-agreement additions endpoint, so `cw_search_agreement_additions` iterates agreements and queries each one. A full scan costs roughly one API call per agreement and is slow on a large instance: narrow it with `agreementConditions`, or set `maxAgreements` to sanity check the query first. Active agreements only by default, and additions whose `cancelledDate` has already passed are excluded unless asked for.
+
+`cw_update_agreement_addition_product` repoints the product and, in the same PATCH, re-sends `unitPrice`, `unitCost`, `quantity`, `invoiceDescription`, `taxableFlag` and `billCustomer` at their pre-change values, because ConnectWise otherwise defaults them from the new catalog item and silently reprices the line. It reads the addition back afterwards and returns a before/after comparison of every field, flagging anything that changed other than the product. `dryRun` defaults to `true` and returns the planned PATCH without sending it.
 
 ### Invoices
 - `cw_search_invoices` — Search invoices
@@ -141,6 +169,19 @@ If your self-hosted instance uses a self-signed certificate, also set `CW_MANAGE
 - `cw_list_catalog_subcategories` — List catalog subcategories
 - `cw_list_manufacturers` — List manufacturers
 
+### Procurement Inventory
+Warehouse stock and Inventory Adjustments. An adjustment is the only supported way to change on-hand quantities through the API: create the header, add the lines, then close it to post.
+- `cw_list_warehouses`: List inventory warehouses
+- `cw_list_warehouse_bins`: List warehouse bins, optionally for one warehouse
+- `cw_get_inventory_on_hand`: Report every item with non-zero on-hand per bin, negatives included, with unit cost and extended value
+- `cw_list_adjustment_types`: List inventory adjustment types
+- `cw_create_adjustment`: Create an adjustment header (moves no stock)
+- `cw_add_adjustment_detail`: Add one signed adjustment line, with serial numbers for serialised items
+- `cw_get_adjustment`: Get an adjustment header with all of its detail lines
+- `cw_close_adjustment`: Post the adjustment. **Not reversible except by a counter-adjustment**
+
+Two limits of the ConnectWise API are worth knowing before using these. There is no `summary` field on an adjustment: the free-text fields are `reason` (max 100 characters) and `notes`. And no endpoint exposes an average cost, so the `unitCost` reported by `cw_get_inventory_on_hand` is the catalog item's own `cost` field, which is the standing cost rather than the weighted average cost ConnectWise values the stock at.
+
 ### Health
 - `cw_test_connection` — Test connection (hits `/system/info`)
 
@@ -155,7 +196,7 @@ Add to your `claude_desktop_config.json`:
   "mcpServers": {
     "connectwise-manage": {
       "command": "npx",
-      "args": ["@wyre-technology/connectwise-manage-mcp"],
+      "args": ["@wyre-ai/connectwise-manage-mcp"],
       "env": {
         "CW_MANAGE_COMPANY_ID": "your-company-id",
         "CW_MANAGE_PUBLIC_KEY": "your-public-key",
@@ -174,7 +215,7 @@ For a self-hosted instance:
   "mcpServers": {
     "connectwise-manage": {
       "command": "npx",
-      "args": ["@wyre-technology/connectwise-manage-mcp"],
+      "args": ["@wyre-ai/connectwise-manage-mcp"],
       "env": {
         "CW_MANAGE_URL": "https://cwm.yourcompany.com",
         "CW_MANAGE_COMPANY_ID": "your-company-id",

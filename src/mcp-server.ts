@@ -17,16 +17,19 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getConfig, CwManageClient, type CwManageConfig } from "./api-client.js";
+import { registerCardResources } from "./resources.js";
 import { registerTicketTools } from "./tools/tickets.js";
 import { registerCompanyTools } from "./tools/companies.js";
 import { registerContactTools } from "./tools/contacts.js";
 import { registerProjectTools } from "./tools/projects.js";
 import { registerTimeEntryTools } from "./tools/time-entries.js";
+import { registerScheduleTools } from "./tools/schedule.js";
 import { registerMemberTools } from "./tools/members.js";
 import { registerConfigurationTools } from "./tools/configurations.js";
 import { registerServiceTools } from "./tools/service.js";
 import { registerActivityTools } from "./tools/activities.js";
 import { registerCatalogTools } from "./tools/catalog.js";
+import { registerProcurementTools } from "./tools/procurement.js";
 import { registerHealthTools } from "./tools/health.js";
 import { registerAgreementTools } from "./tools/agreements.js";
 import { registerOpportunityTools } from "./tools/opportunities.js";
@@ -99,6 +102,10 @@ export function createMcpServer(configOverride?: CwManageConfig): McpServer {
     version: "1.4.0",
   });
 
+  // MCP Apps (SEP-1865): the ui:// ticket card is static embedded HTML, so it
+  // is served with or without credentials (hosts may prefetch it).
+  registerCardResources(server);
+
   const config = configOverride ?? getConfig();
 
   if (!config) {
@@ -143,11 +150,13 @@ export function createMcpServer(configOverride?: CwManageConfig): McpServer {
   registerContactTools(server, client);
   registerProjectTools(server, client);
   registerTimeEntryTools(server, client);
+  registerScheduleTools(server, client);
   registerMemberTools(server, client);
   registerConfigurationTools(server, client);
   registerServiceTools(server, client);
   registerActivityTools(server, client);
   registerCatalogTools(server, client);
+  registerProcurementTools(server, client);
   registerHealthTools(server, client);
   registerAgreementTools(server, client);
   registerOpportunityTools(server, client);
